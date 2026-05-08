@@ -1,0 +1,37 @@
+{
+  "Title": "Sandbox",
+  "Type": "game",
+  "Org": "facepunch",
+  "Ident": "sandbox",
+  "Schema": 1,
+  "IncludeSourceFiles": false,
+  "Resources": "/fonts/*\n/UI/*.png\n/ui/*.png\n/ui/*\n/ui/weapons/melee/*",
+  "PackageReferences": [],
+  "EditorReferences": null,
+  "Mounts": [],
+  "IsStandaloneOnly": false,
+  "Metadata": {
+    "MaxPlayers": 32,
+    "MinPlayers": 1,
+    "TickRate": 50,
+    "GameNetworkType": "Multiplayer",
+    "MapSelect": "Unrestricted",
+    "MapList": [
+      "facepunch.flatgrass"
+    ],
+    "RankType": "None",
+    "PerMapRanking": false,
+    "LeaderboardType": "None",
+    "CsProjName": "",
+    "StartupScene": "scenes/sandbox.scene",
+    "ControlModes": {
+      "Keyboard": true,
+      "VR": false,
+      "Gamepad": true
+    },
+    "LaunchMode": "Launcher",
+    "MapStartupScene": "scenes/sandbox.scene",
+    "DedicatedServerStartupScene": "scenes/sandbox.scene",
+    "SystemScene": "scenes/system.scene"
+  }
+}

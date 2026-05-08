@@ -1,0 +1,9 @@
+{
+  "Prefab": "entities/sents/npc/target_dummy.prefab",
+  "Title": "Target Dummy",
+  "Description": "A stationary target dummy for testing hitbox display. Respawns after being killed.",
+  "Category": "Npc",
+  "IncludeCode": false,
+  "__references": [],
+  "__version": 0
+}
