@@ -85,8 +85,9 @@ public partial class Toolgun : ScreenWeapon
 		var newMode = GetComponents<ToolMode>( true ).Where( x => x.GetType() == targetMode.TargetType ).FirstOrDefault();
 		if ( newMode == null )
 		{
-			Log.Warning( $"Toolgun missing mode component for {name}" );
-			return;
+			// Mode component doesn't exist yet — create it dynamically
+			newMode = Components.Create( targetMode, false ) as ToolMode;
+			Network.Refresh( GameObject );
 		}
 
 		var currentMode = GetCurrentMode();
