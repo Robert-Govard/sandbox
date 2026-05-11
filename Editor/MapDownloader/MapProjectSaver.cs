@@ -6,14 +6,14 @@ namespace Editor;
 /// and edited in Hammer.
 ///
 /// Strategy:
-/// 1. Snapshot diff — take a snapshot of FileSystem.Mounted before and after
-///    mounting the package. The diff is exactly the new files. Works for
-///    newly downloaded maps.
-/// 2. Direct mounted FS lookup — for already-mounted maps (built-in or cached),
-///    look for maps/{packagename}.vpk and deps in maps/{packagename}/.
-///    The VPK filename in the virtual FS matches the package name part of the ident.
-/// 3. Package download cache dir on disk — {sbox_root}/download/assets/{ident_dir}/
-/// 4. AssetSystem.GetPackageFiles / FindByPath — for non-map asset packages
+/// 1. Disk snapshot diff — snapshot the sbox download directory on disk
+///    BEFORE and AFTER calling MountAsync(). New files = our package files.
+///    This is the primary approach and works for any newly downloaded package.
+/// 2. Direct mounted FS lookup — for already-cached maps, look for
+///    maps/{packagename}.vpk in FileSystem.Mounted.
+/// 3. Package download cache scan — search the download dir for paths
+///    containing the package ident.
+/// 4. AssetSystem — for non-map asset packages.
 /// </summary>
 public static class MapProjectSaver
 {
@@ -28,14 +28,17 @@ public static class MapProjectSaver
 		try
 		{
 			var targetRoot = GetMapsDirectory();
-
-			// Extract the package name part from the ident
-			// e.g. "facepunch.flatgrass" -> "flatgrass"
 			var packageName = GetPackageName( mapIdent );
 
-			// Step 1: Snapshot all files visible in the mounted filesystem BEFORE mounting
-			var beforeFiles = SnapshotMountedFiles();
-			Log.Info( $"MapProjectSaver: Snapshot before mount: {beforeFiles.Count} file(s)" );
+			// Step 1: Snapshot the sbox download directory on disk BEFORE mounting
+			var sboxRoot = GetSboxRoot();
+			var downloadDir = string.IsNullOrEmpty( sboxRoot ) ? "" : System.IO.Path.Combine( sboxRoot, "download" );
+
+			var beforeFiles = System.IO.Directory.Exists( downloadDir )
+				? SnapshotDiskDirectory( downloadDir )
+				: new HashSet<string>();
+
+			Log.Info( $"MapProjectSaver: Disk snapshot before mount: {beforeFiles.Count} file(s) in '{downloadDir}'" );
 
 			// Step 2: Fetch and mount the package (downloads to cache if needed)
 			var package = await Package.FetchAsync( mapIdent, false );
@@ -53,29 +56,30 @@ public static class MapProjectSaver
 				await AssetSystem.InstallAsync( package.FullIdent );
 			}
 
-			// Step 4: Snapshot AFTER mounting and diff
-			var afterFiles = SnapshotMountedFiles();
+			// Step 4: Snapshot the download directory AFTER mounting and diff
+			var afterFiles = System.IO.Directory.Exists( downloadDir )
+				? SnapshotDiskDirectory( downloadDir )
+				: new HashSet<string>();
+
 			var newFiles = new HashSet<string>( afterFiles );
 			newFiles.ExceptWith( beforeFiles );
 
-			Log.Info( $"MapProjectSaver: Snapshot after mount: {afterFiles.Count} file(s), new: {newFiles.Count} file(s)" );
+			Log.Info( $"MapProjectSaver: Disk snapshot after mount: {afterFiles.Count} file(s), new: {newFiles.Count} file(s)" );
 
 			var copiedCount = 0;
 
-			// Approach 1: Copy files discovered by the before/after diff
+			// Approach 1: Copy files discovered by the disk before/after diff
 			if ( newFiles.Count > 0 )
 			{
-				copiedCount = CopyNewMountedFiles( newFiles, targetRoot );
+				copiedCount = CopyNewDiskFiles( newFiles, downloadDir!, targetRoot );
 				if ( copiedCount > 0 )
 				{
-					Log.Info( $"MapProjectSaver: Saved '{mapIdent}' via mount diff ({copiedCount} file(s))" );
+					Log.Info( $"MapProjectSaver: Saved '{mapIdent}' via disk diff ({copiedCount} file(s))" );
 					return copiedCount;
 				}
 			}
 
 			// Approach 2: Direct lookup in FileSystem.Mounted for already-mounted maps
-			// After mounting, the map VPK is accessible as maps/{packagename}.vpk
-			// and dependencies may be in maps/{packagename}/
 			copiedCount = CopyViaDirectLookup( packageName, targetRoot );
 			if ( copiedCount > 0 )
 			{
@@ -83,11 +87,11 @@ public static class MapProjectSaver
 				return copiedCount;
 			}
 
-			// Approach 3: Copy from the package-specific download cache directory on disk
-			copiedCount = CopyViaPackageDir( mapIdent, targetRoot );
+			// Approach 3: Search the download cache for paths containing our ident
+			copiedCount = CopyViaDownloadCacheScan( mapIdent, packageName, downloadDir!, targetRoot );
 			if ( copiedCount > 0 )
 			{
-				Log.Info( $"MapProjectSaver: Saved '{mapIdent}' via package dir ({copiedCount} file(s))" );
+				Log.Info( $"MapProjectSaver: Saved '{mapIdent}' via download cache scan ({copiedCount} file(s))" );
 				return copiedCount;
 			}
 
@@ -131,7 +135,7 @@ public static class MapProjectSaver
 	/// <summary>
 	/// Extract the package name part from a map ident.
 	/// e.g. "facepunch.flatgrass" -> "flatgrass"
-	/// e.g. "softsplit.gm_bigcity" -> "gm_bigcity"
+	/// e.g. "thieves.rpdowntown3t" -> "rpdowntown3t"
 	/// </summary>
 	private static string GetPackageName( string mapIdent )
 	{
@@ -142,68 +146,57 @@ public static class MapProjectSaver
 	}
 
 	/// <summary>
-	/// Take a snapshot of all files visible in FileSystem.Mounted under common
-	/// resource directories. We only scan directories where map assets live
-	/// (maps/, materials/, models/, textures/, sounds/, particles/, etc.)
-	/// to keep the snapshot fast and relevant.
+	/// Get the sbox install root directory by using FileSystem.Root.
 	/// </summary>
-	private static HashSet<string> SnapshotMountedFiles()
+	private static string GetSboxRoot()
+	{
+		return FileSystem.Root.GetFullPath( "/" ) ?? "";
+	}
+
+	/// <summary>
+	/// Take a snapshot of all files in a disk directory (recursive).
+	/// Returns a set of full file paths.
+	/// </summary>
+	private static HashSet<string> SnapshotDiskDirectory( string rootDir )
 	{
 		var files = new HashSet<string>( System.StringComparer.OrdinalIgnoreCase );
 
-		var scanDirs = new[] { "maps", "materials", "models", "textures", "sounds", "particles", "shaders", "ui" };
+		if ( !System.IO.Directory.Exists( rootDir ) )
+			return files;
 
-		foreach ( var dir in scanDirs )
+		try
 		{
-			if ( !FileSystem.Mounted.DirectoryExists( dir ) ) continue;
-
-			foreach ( var file in FileSystem.Mounted.FindFile( dir, "*", true ) )
+			foreach ( var file in System.IO.Directory.GetFiles( rootDir, "*", System.IO.SearchOption.AllDirectories ) )
 			{
-				files.Add( $"{dir}/{file}" );
+				files.Add( file );
 			}
+		}
+		catch ( System.Exception ex )
+		{
+			Log.Warning( $"MapProjectSaver: Error snapshotting '{rootDir}': {ex.Message}" );
 		}
 
 		return files;
 	}
 
 	/// <summary>
-	/// Copy files discovered by the before/after mount diff from the mounted
-	/// filesystem to the project's Assets/Maps directory.
-	/// Map VPK files go to the root of Maps/. Dependency files (materials, models,
-	/// etc.) preserve their directory structure under Maps/.
+	/// Copy files discovered by the disk before/after diff.
+	/// Maps the source paths to the target directory, stripping the download
+	/// root prefix and adjusting for the Maps/ target structure.
 	/// </summary>
-	private static int CopyNewMountedFiles( HashSet<string> newFiles, string targetRoot )
+	private static int CopyNewDiskFiles( HashSet<string> newFiles, string downloadRoot, string targetRoot )
 	{
 		var copiedCount = 0;
+		var downloadRootLength = downloadRoot.Length;
 
-		foreach ( var mountedPath in newFiles )
+		foreach ( var sourcePath in newFiles )
 		{
-			if ( !FileSystem.Mounted.FileExists( mountedPath ) ) continue;
+			// Get the relative path within the download directory
+			// e.g. "C:\...\download\assets\maps\rp_downtown_3t.vpk" -> "assets\maps\rp_downtown_3t.vpk"
+			var relPath = sourcePath[( downloadRootLength )..].TrimStart( System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar );
 
-			var data = FileSystem.Mounted.ReadAllBytes( mountedPath );
-			if ( data.Length == 0 ) continue;
-
-			// Build the target relative path:
-			// - maps/xxx.vpk -> xxx.vpk  (map VPKs go to Maps/ root)
-			// - materials/... -> materials/...  (deps keep their structure under Maps/)
-			string targetRelative;
-			if ( mountedPath.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
-				targetRelative = mountedPath[5..];
-			else
-				targetRelative = mountedPath;
-
-			var targetPath = System.IO.Path.Combine( targetRoot, targetRelative );
-			var targetDir = System.IO.Path.GetDirectoryName( targetPath );
-
-			if ( !string.IsNullOrEmpty( targetDir ) )
-				System.IO.Directory.CreateDirectory( targetDir );
-
-			if ( !System.IO.File.Exists( targetPath ) )
-			{
-				System.IO.File.WriteAllBytes( targetPath, data.ToArray() );
+			if ( TryCopyFile( sourcePath, relPath, targetRoot ) )
 				copiedCount++;
-				Log.Info( $"MapProjectSaver: Extracted '{mountedPath}' from mounted FS ({data.Length} bytes)" );
-			}
 		}
 
 		return copiedCount;
@@ -233,8 +226,6 @@ public static class MapProjectSaver
 				baseName = baseName[..^4];
 
 			// Check if this VPK belongs to our map
-			// e.g. packageName="flatgrass" matches "flatgrass.vpk", "flatgrass_baked.vpk"
-			// but NOT "other_flatgrass.vpk"
 			if ( baseName != packageNameLower && !baseName.StartsWith( packageNameLower + "_" ) )
 				continue;
 
@@ -289,7 +280,6 @@ public static class MapProjectSaver
 			var data = FileSystem.Mounted.ReadAllBytes( mountedPath );
 			if ( data.Length == 0 ) continue;
 
-			// Build relative path: "maps/flatgrass/materials/foo.vmat" -> "flatgrass/materials/foo.vmat"
 			var targetRelative = mountedPath;
 			if ( targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
 				targetRelative = targetRelative[5..];
@@ -314,52 +304,105 @@ public static class MapProjectSaver
 	}
 
 	/// <summary>
-	/// Copy files from the package-specific download cache directory on disk.
-	/// After MountAsync(), packages are downloaded to:
-	///   {sbox_root}/download/assets/{org}_{package}/
-	/// The directory name is the full ident with dots replaced by underscores.
+	/// Search the download cache directory for paths containing our package ident.
+	/// This handles the case where the map was previously downloaded (not newly)
+	/// so the disk diff is 0, but the files still exist on disk.
+	///
+	/// We search for:
+	/// - download/assets/{ident_with_underscores}/  (e.g. thieves_rpdowntown3t/)
+	/// - download/assets/maps/ — any VPK whose name contains the package name
+	/// - Any directory whose name contains the package name
 	/// </summary>
-	private static int CopyViaPackageDir( string mapIdent, string targetRoot )
+	private static int CopyViaDownloadCacheScan( string mapIdent, string packageName, string downloadRoot, string targetRoot )
 	{
-		var sboxRoot = GetSboxRoot();
-		if ( string.IsNullOrEmpty( sboxRoot ) || !System.IO.Directory.Exists( sboxRoot ) )
-			return 0;
-
-		var downloadAssets = System.IO.Path.Combine( sboxRoot, "download", "assets" );
-		if ( !System.IO.Directory.Exists( downloadAssets ) )
-			return 0;
-
-		// The download directory uses the full ident with dots -> underscores
-		// e.g. "softsplit.gm_bigcity" -> "softsplit_gm_bigcity"
-		var identDirName = mapIdent.Replace( '.', '_' );
-
-		var packageDir = System.IO.Path.Combine( downloadAssets, identDirName );
-		Log.Info( $"MapProjectSaver: Checking package dir '{packageDir}' exists={System.IO.Directory.Exists( packageDir )}" );
-
-		if ( !System.IO.Directory.Exists( packageDir ) )
+		if ( string.IsNullOrEmpty( downloadRoot ) || !System.IO.Directory.Exists( downloadRoot ) )
 			return 0;
 
 		var copiedCount = 0;
+		var assetsDir = System.IO.Path.Combine( downloadRoot, "assets" );
 
-		foreach ( var file in System.IO.Directory.GetFiles( packageDir, "*", System.IO.SearchOption.AllDirectories ) )
+		if ( !System.IO.Directory.Exists( assetsDir ) )
+			return 0;
+
+		// Search 1: Package-specific directory (ident with dots -> underscores)
+		var identDirName = mapIdent.Replace( '.', '_' );
+		var packageDir = System.IO.Path.Combine( assetsDir, identDirName );
+
+		if ( System.IO.Directory.Exists( packageDir ) )
 		{
-			var relPath = file[( packageDir.Length + 1 )..];
-			// Skip thumbnails — they're not needed for the map to work
-			if ( relPath.StartsWith( "thumb", System.StringComparison.OrdinalIgnoreCase ) ) continue;
+			foreach ( var file in System.IO.Directory.GetFiles( packageDir, "*", System.IO.SearchOption.AllDirectories ) )
+			{
+				var relPath = file[( packageDir.Length + 1 )..];
+				if ( relPath.StartsWith( "thumb", System.StringComparison.OrdinalIgnoreCase ) ) continue;
 
-			if ( TryCopyFile( file, relPath, targetRoot ) )
-				copiedCount++;
+				if ( TryCopyFile( file, relPath, targetRoot ) )
+					copiedCount++;
+			}
+
+			if ( copiedCount > 0 )
+				return copiedCount;
+		}
+
+		// Search 2: Scan top-level directories in assets/ for our package name
+		var packageNameLower = packageName.ToLowerInvariant();
+
+		foreach ( var dir in System.IO.Directory.GetDirectories( assetsDir, "*", System.IO.SearchOption.TopDirectoryOnly ) )
+		{
+			var dirName = System.IO.Path.GetFileName( dir ).ToLowerInvariant();
+
+			// Check if directory name contains the package name or vice versa
+			if ( !dirName.Contains( packageNameLower ) && !packageNameLower.Contains( dirName ) )
+				continue;
+
+			// Found a matching directory — copy all files
+			foreach ( var file in System.IO.Directory.GetFiles( dir, "*", System.IO.SearchOption.AllDirectories ) )
+			{
+				var relPath = file[( dir.Length + 1 )..];
+				if ( relPath.StartsWith( "thumb", System.StringComparison.OrdinalIgnoreCase ) ) continue;
+
+				if ( TryCopyFile( file, relPath, targetRoot ) )
+					copiedCount++;
+			}
+
+			if ( copiedCount > 0 )
+				return copiedCount;
+		}
+
+		// Search 3: Scan maps/ subdirectory for VPKs matching our package name
+		var mapsDir = System.IO.Path.Combine( assetsDir, "maps" );
+		if ( System.IO.Directory.Exists( mapsDir ) )
+		{
+			foreach ( var dir in System.IO.Directory.GetDirectories( mapsDir, "*", System.IO.SearchOption.TopDirectoryOnly ) )
+			{
+				var dirName = System.IO.Path.GetFileName( dir ).ToLowerInvariant();
+				if ( !dirName.Contains( packageNameLower ) && !packageNameLower.Contains( dirName ) )
+					continue;
+
+				foreach ( var file in System.IO.Directory.GetFiles( dir, "*", System.IO.SearchOption.AllDirectories ) )
+				{
+					var relPath = $"maps/{dirName}/{file[( dir.Length + 1 )..]}";
+					if ( TryCopyFile( file, relPath, targetRoot ) )
+						copiedCount++;
+				}
+
+				if ( copiedCount > 0 )
+					return copiedCount;
+			}
+
+			// Also check top-level VPKs
+			foreach ( var file in System.IO.Directory.GetFiles( mapsDir, "*.vpk", System.IO.SearchOption.TopDirectoryOnly ) )
+			{
+				var fileName = System.IO.Path.GetFileNameWithoutExtension( file ).ToLowerInvariant();
+				if ( !fileName.Contains( packageNameLower ) && !packageNameLower.Contains( fileName ) )
+					continue;
+
+				var fullFileName = System.IO.Path.GetFileName( file );
+				if ( TryCopyFile( file, $"maps/{fullFileName}", targetRoot ) )
+					copiedCount++;
+			}
 		}
 
 		return copiedCount;
-	}
-
-	/// <summary>
-	/// Get the sbox install root directory by using FileSystem.Root.
-	/// </summary>
-	private static string GetSboxRoot()
-	{
-		return FileSystem.Root.GetFullPath( "/" ) ?? "";
 	}
 
 	/// <summary>
@@ -432,10 +475,22 @@ public static class MapProjectSaver
 	{
 		var targetRelative = relativePath;
 
-		// Strip "maps/" prefix - targetRoot already is Assets/Maps/
-		if ( targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
+		// Normalize path separators
+		targetRelative = targetRelative.Replace( '/', System.IO.Path.DirectorySeparatorChar );
+
+		// Strip "maps\" or "maps/" prefix - targetRoot already is Assets/Maps/
+		if ( targetRelative.StartsWith( "maps" + System.IO.Path.DirectorySeparatorChar, System.StringComparison.OrdinalIgnoreCase ) ||
+			 targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
 		{
-			targetRelative = targetRelative[5..];
+			var prefixLen = targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) ? 5 : 5;
+			targetRelative = targetRelative[prefixLen..];
+		}
+
+		// Strip "assets\" or "assets/" prefix — download cache paths include this
+		if ( targetRelative.StartsWith( "assets" + System.IO.Path.DirectorySeparatorChar, System.StringComparison.OrdinalIgnoreCase ) ||
+			 targetRelative.StartsWith( "assets/", System.StringComparison.OrdinalIgnoreCase ) )
+		{
+			targetRelative = targetRelative[7..];
 		}
 
 		var targetPath = System.IO.Path.Combine( targetRoot, targetRelative );
@@ -449,8 +504,16 @@ public static class MapProjectSaver
 		if ( System.IO.File.Exists( targetPath ) )
 			return false;
 
-		System.IO.File.Copy( sourcePath, targetPath, overwrite: false );
-		return true;
+		try
+		{
+			System.IO.File.Copy( sourcePath, targetPath, overwrite: false );
+			return true;
+		}
+		catch ( System.Exception ex )
+		{
+			Log.Warning( $"MapProjectSaver: Failed to copy '{sourcePath}' -> '{targetPath}': {ex.Message}" );
+			return false;
+		}
 	}
 
 	/// <summary>
