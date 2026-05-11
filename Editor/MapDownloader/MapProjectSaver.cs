@@ -123,7 +123,7 @@ public static class MapProjectSaver
 	/// </summary>
 	private static HashSet<string> SnapshotMountedFiles()
 	{
-		var files = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
+		var files = new HashSet<string>( System.StringComparer.OrdinalIgnoreCase );
 
 		var scanDirs = new[] { "maps", "materials", "models", "textures", "sounds", "particles", "shaders", "ui" };
 
@@ -161,7 +161,7 @@ public static class MapProjectSaver
 			// - maps/xxx.vpk -> xxx.vpk  (map VPKs go to Maps/ root)
 			// - materials/... -> materials/...  (deps keep their structure under Maps/)
 			string targetRelative;
-			if ( mountedPath.StartsWith( "maps/", StringComparison.OrdinalIgnoreCase ) )
+			if ( mountedPath.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
 				targetRelative = mountedPath[5..];
 			else
 				targetRelative = mountedPath;
