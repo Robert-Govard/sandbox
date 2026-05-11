@@ -152,6 +152,8 @@ public sealed class MapDownloaderEditor : ComponentEditorWidget
 
 		try
 		{
+			// Use the standalone overload — it does its own Fetch+Mount+Snapshot
+			// This is necessary because we need a fresh before/after diff
 			var count = await MapProjectSaver.SaveWithDependencies( Target.MapIdent );
 
 			if ( !Target.IsValid() ) return;

@@ -47,7 +47,7 @@ public sealed class MapDownloaderComponent : Component, Component.ExecuteInEdito
 
 		Status = $"Fetching {MapIdent}...";
 
-		var package = await Package.Fetch( MapIdent, false );
+		var package = await Package.FetchAsync( MapIdent, false );
 
 		if ( package == null || package.Revision == null )
 		{
@@ -91,7 +91,7 @@ public sealed class MapDownloaderComponent : Component, Component.ExecuteInEdito
 
 		Status = $"Fetching {MapIdent}...";
 
-		var package = await Package.Fetch( MapIdent, false );
+		var package = await Package.FetchAsync( MapIdent, false );
 
 		if ( package == null || package.Revision == null )
 		{
@@ -104,9 +104,14 @@ public sealed class MapDownloaderComponent : Component, Component.ExecuteInEdito
 
 		await package.MountAsync();
 
-		Status = $"Switching to {MapIdent}...";
+		// Use the package name (after dot) as the map name for LaunchArguments
+		var mapName = MapIdent;
+		if ( mapName.Contains( '.' ) )
+			mapName = mapName[( mapName.IndexOf( '.' ) + 1 )..];
 
-		LaunchArguments.Map = MapIdent;
+		Status = $"Switching to {mapName}...";
+
+		LaunchArguments.Map = mapName;
 		Game.Load( Game.Ident, true );
 	}
 
