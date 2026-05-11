@@ -56,6 +56,7 @@ public sealed partial class GameManager : GameObjectSystem<GameManager>, Compone
 		data.SteamId = (long)channel.SteamId;
 		data.PlayerId = channel.Id;
 		data.DisplayName = channel.DisplayName;
+		data.LoadMoney();
 
 		go.NetworkSpawn( null );
 		go.Network.SetOwnerTransfer( OwnerTransfer.Fixed );

@@ -15,6 +15,52 @@ public sealed partial class PlayerData : Component, Global.ISaveEvents
 
 	[Sync] public bool IsGodMode { get; set; }
 
+	/// <summary>
+	/// Player's current money balance.
+	/// </summary>
+	[Sync( SyncFlags.FromHost )] public long Money { get; set; }
+
+	/// <summary>
+	/// Add money to the player's balance. Host-only.
+	/// </summary>
+	public void AddMoney( long amount )
+	{
+		if ( !Networking.IsHost ) return;
+		Money += amount;
+		if ( Money < 0 ) Money = 0;
+		SaveMoney();
+	}
+
+	/// <summary>
+	/// Try to spend money. Returns true if the player had enough and the amount was deducted. Host-only.
+	/// </summary>
+	public bool SpendMoney( long amount )
+	{
+		if ( !Networking.IsHost ) return false;
+		if ( Money < amount ) return false;
+		Money -= amount;
+		SaveMoney();
+		return true;
+	}
+
+	/// <summary>
+	/// Save money to disk keyed by SteamId so it persists between sessions.
+	/// </summary>
+	void SaveMoney()
+	{
+		if ( SteamId <= 0 ) return;
+		LocalData.Set( $"money/{SteamId}", Money );
+	}
+
+	/// <summary>
+	/// Load money from disk keyed by SteamId. Called on host after SteamId is set.
+	/// </summary>
+	public void LoadMoney()
+	{
+		if ( SteamId <= 0 ) return;
+		Money = LocalData.Get<long>( $"money/{SteamId}", 0 );
+	}
+
 	public Connection Connection => Connection.Find( PlayerId );
 
 	/// <summary>

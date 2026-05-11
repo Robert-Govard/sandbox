@@ -1,0 +1,226 @@
+@using Sandbox;
+@using Sandbox.UI;
+@namespace Sandbox
+@inherits PanelComponent
+
+<root @onmousedown=@OnMenuClicked>
+
+    <div class="mp-menu-wrapper">
+        <div class="mp-menu-backdrop" @onclick="@CloseMenu"></div>
+        <div class="mp-menu-slide">
+
+            @if ( _target.IsValid() )
+            {
+                <div class="mp-panel">
+                    <div class="mp-header">
+                        <div class="mp-title">Money Printer</div>
+                        <div class="mp-close" @onclick="@CloseMenu">X</div>
+                    </div>
+
+                    <div class="mp-tabs">
+                        <div class="mp-tab @(_activeTab == "status" ? "active" : "")" @onclick="@(() => _activeTab = "status")">Status</div>
+                        <div class="mp-tab @(_activeTab == "upgrades" ? "active" : "")" @onclick="@(() => _activeTab = "upgrades")">Upgrades</div>
+                    </div>
+
+                    @if ( _activeTab == "status" )
+                    {
+                        <div class="mp-content">
+                            <div class="mp-row">
+                                <span class="mp-label">Status</span>
+                                <span class="mp-value @(_target.IsActive ? "active" : "inactive")">@(_target.IsActive ? "Active" : "Inactive")</span>
+                            </div>
+                            <div class="mp-row">
+                                <span class="mp-label">Money/sec</span>
+                                <span class="mp-value">$@(_target.EffectiveMoneyPerSecond.ToString("F1"))</span>
+                            </div>
+                            <div class="mp-row">
+                                <span class="mp-label">Print Interval</span>
+                                <span class="mp-value">@(_target.EffectivePrintInterval.ToString("F2"))s</span>
+                            </div>
+                            <div class="mp-row">
+                                <span class="mp-label">Total Printed</span>
+                                <span class="mp-value">$@(_target.TotalPrinted)</span>
+                            </div>
+                            <div class="mp-row">
+                                <span class="mp-label">Your Balance</span>
+                                <span class="mp-value">$@(_playerMoney)</span>
+                            </div>
+                            <div class="mp-actions">
+                                <button class="menu-action primary" @onclick="@TogglePrinter">
+                                    @(_target.IsActive ? "Pause" : "Start")
+                                </button>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mp-content">
+                            <div class="mp-card">
+                                <div class="mp-card-title">Money Per Second</div>
+                                <div class="mp-card-info">
+                                    <span>Level @(_target.MoneyUpgradeLevel) / @(_target.MaxUpgradeLevel)</span>
+                                    <span>Current: $@(_target.EffectiveMoneyPerSecond.ToString("F1"))/s</span>
+                                    @if ( _target.MoneyUpgradeLevel < _target.MaxUpgradeLevel )
+                                    {
+                                        var next = _target.BaseMoneyPerSecond * (1f + (_target.MoneyUpgradeLevel + 1) * 0.5f);
+                                        <span>Next: $@(next.ToString("F1"))/s</span>
+                                    }
+                                </div>
+                                @if ( _target.MoneyUpgradeLevel < _target.MaxUpgradeLevel )
+                                {
+                                    <button class="menu-action soft @(_playerMoney < _target.MoneyUpgradeCost ? "disabled" : "")"
+                                            @onclick="@UpgradeMoney">
+                                        Upgrade - $@(_target.MoneyUpgradeCost)
+                                    </button>
+                                }
+                                else
+                                {
+                                    <div class="mp-max">MAX LEVEL</div>
+                                }
+                            </div>
+
+                            <div class="mp-card">
+                                <div class="mp-card-title">Print Speed</div>
+                                <div class="mp-card-info">
+                                    <span>Level @(_target.SpeedUpgradeLevel) / @(_target.MaxUpgradeLevel)</span>
+                                    <span>Current: @(_target.EffectivePrintInterval.ToString("F2"))s</span>
+                                    @if ( _target.SpeedUpgradeLevel < _target.MaxUpgradeLevel )
+                                    {
+                                        var next = _target.BasePrintInterval / (1f + (_target.SpeedUpgradeLevel + 1) * 0.3f);
+                                        <span>Next: @(next.ToString("F2"))s</span>
+                                    }
+                                </div>
+                                @if ( _target.SpeedUpgradeLevel < _target.MaxUpgradeLevel )
+                                {
+                                    <button class="menu-action soft @(_playerMoney < _target.SpeedUpgradeCost ? "disabled" : "")"
+                                            @onclick="@UpgradeSpeed">
+                                        Upgrade - $@(_target.SpeedUpgradeCost)
+                                    </button>
+                                }
+                                else
+                                {
+                                    <div class="mp-max">MAX LEVEL</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+
+        </div>
+    </div>
+
+</root>
+
+@code
+{
+    MoneyPrinterEntity _target;
+    long _playerMoney;
+    string _activeTab = "status";
+    bool _isOpen;
+    RealTimeSince _timeSinceToggle;
+
+    protected override int BuildHash()
+    {
+        var t = _target;
+        if ( !t.IsValid() ) return HashCode.Combine( false, _activeTab );
+        return HashCode.Combine(
+            t.IsActive,
+            t.EffectiveMoneyPerSecond,
+            t.EffectivePrintInterval,
+            t.TotalPrinted,
+            t.MoneyUpgradeLevel,
+            t.SpeedUpgradeLevel,
+            _playerMoney,
+            _activeTab
+        );
+    }
+
+    protected override void OnUpdate()
+    {
+        var player = Player.FindLocalPlayer();
+        _playerMoney = player?.PlayerData?.Money ?? 0;
+
+        // Check for E press (with delay to prevent instant re-toggle)
+        if ( Input.Pressed( "use" ) && _timeSinceToggle > 0.2f )
+        {
+            if ( _isOpen )
+            {
+                // Close menu
+                CloseMenu();
+            }
+            else if ( player.IsValid() )
+            {
+                // Sphere-trace from player's eyes to find a printer (radius for easier targeting)
+                var eye = player.EyeTransform;
+                var ray = new Ray( eye.Position, eye.Forward );
+
+                var tr = Scene.Trace.Ray( ray, 150f )
+                    .Radius( 8f )
+                    .IgnoreGameObjectHierarchy( player.GameObject )
+                    .Run();
+
+                if ( tr.Hit )
+                {
+                    // Search up the hierarchy for a MoneyPrinterEntity
+                    var printer = tr.GameObject.GetComponentInParent<MoneyPrinterEntity>( true )
+                                ?? tr.GameObject.Root.GetComponent<MoneyPrinterEntity>( true );
+                    if ( printer.IsValid() )
+                    {
+                        OpenMenu( printer );
+                    }
+                }
+            }
+        }
+
+        // Also open if IPressable.Press set MenuTarget (engine-handled E interaction)
+        if ( !_isOpen && MoneyPrinterEntity.MenuTarget.IsValid() )
+        {
+            OpenMenu( MoneyPrinterEntity.MenuTarget );
+            MoneyPrinterEntity.MenuTarget = null; // Clear so it doesn't re-trigger
+        }
+
+        // Close on Escape
+        if ( _isOpen && Input.Pressed( "menu" ) )
+        {
+            CloseMenu();
+        }
+
+        SetClass( "open", _isOpen );
+    }
+
+    void OpenMenu( MoneyPrinterEntity printer )
+    {
+        _target = printer;
+        _isOpen = true;
+        _activeTab = "status";
+        _timeSinceToggle = 0;
+    }
+
+    void OnMenuClicked()
+    {
+        Sandbox.UI.InputFocus.Clear();
+    }
+
+    void TogglePrinter() => _target?.ToggleActive();
+
+    void UpgradeMoney()
+    {
+        var t = _target;
+        if ( t == null || t.MoneyUpgradeLevel >= t.MaxUpgradeLevel || _playerMoney < t.MoneyUpgradeCost ) return;
+        t.UpgradeMoney();
+    }
+
+    void UpgradeSpeed()
+    {
+        var t = _target;
+        if ( t == null || t.SpeedUpgradeLevel >= t.MaxUpgradeLevel || _playerMoney < t.SpeedUpgradeCost ) return;
+        t.UpgradeSpeed();
+    }
+
+    void CloseMenu()
+    {
+        _isOpen = false;
+        _timeSinceToggle = 0.2f; // Prevent instant re-open from same E press
+    }
+}

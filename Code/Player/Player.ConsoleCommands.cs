@@ -110,4 +110,25 @@ public sealed partial class Player
 
 		player.Undo.Undo();
 	}
+
+	[ConCmd( "givemoney", ConVarFlags.Server | ConVarFlags.Cheat, Help = "Give money to yourself or another player. Usage: givemoney <amount> [steamid]" )]
+	public static void GiveMoney( Connection source, long amount, long steamId = 0 )
+	{
+		if ( amount <= 0 ) return;
+
+		PlayerData target;
+		if ( steamId > 0 )
+		{
+			target = PlayerData.All.FirstOrDefault( p => p.SteamId == steamId );
+		}
+		else
+		{
+			target = PlayerData.For( source );
+		}
+
+		if ( !target.IsValid() ) return;
+
+		target.AddMoney( amount );
+		source.SendLog( LogLevel.Info, $"Gave ${amount} to {target.DisplayName} (balance: ${target.Money})" );
+	}
 }

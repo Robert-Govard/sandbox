@@ -1,0 +1,242 @@
+@import "/UI/Theme.scss";
+
+MoneyPrinterMenu
+{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    color: $menu-color;
+    justify-content: center;
+    font-family: $body-font;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 1500;
+    pointer-events: none;
+}
+
+MoneyPrinterMenu .mp-menu-wrapper
+{
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in;
+    justify-content: center;
+    align-items: center;
+}
+
+MoneyPrinterMenu.open .mp-menu-wrapper
+{
+    opacity: 1;
+    pointer-events: all;
+    transition: opacity 0.15s ease-out;
+}
+
+MoneyPrinterMenu .mp-menu-backdrop
+{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    backdrop-filter: brightness( 0.4 ) contrast( 0.7 ) saturate( 0.7 );
+    transition: opacity 0.15s ease;
+}
+
+MoneyPrinterMenu .mp-menu-slide
+{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    justify-content: center;
+    align-items: center;
+    transform: translateY( 30px );
+    transition: transform 0.15s ease-in;
+}
+
+MoneyPrinterMenu.open .mp-menu-slide
+{
+    transform: translateY( 0px );
+    transition: transform 0.15s ease-out;
+}
+
+.mp-panel
+{
+    width: 520px;
+    background-color: $menu-panel-bg;
+    border: 1px solid rgba( $color-accent, 0.3 );
+    border-radius: 12px;
+    overflow: hidden;
+    flex-direction: column;
+    backdrop-filter: blur( 8px );
+}
+
+.mp-header
+{
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    background-color: rgba( $color-accent, 0.12 );
+    border-bottom: 1px solid rgba( $color-accent, 0.2 );
+
+    .mp-title
+    {
+        font-family: $title-font;
+        font-size: 20px;
+        font-weight: 700;
+        color: $color-text;
+    }
+
+    .mp-close
+    {
+        font-size: 18px;
+        color: $menu-text;
+        cursor: pointer;
+        padding: 4px 10px;
+        border-radius: 4px;
+
+        &:hover
+        {
+            color: $menu-text-strong;
+            background-color: #fff2;
+        }
+    }
+}
+
+.mp-tabs
+{
+    flex-direction: row;
+    border-bottom: 1px solid rgba( $color-accent, 0.15 );
+    background-color: #0004;
+
+    .mp-tab
+    {
+        flex: 1;
+        justify-content: center;
+        align-items: center;
+        padding: 10px 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: $menu-text;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        font-family: $subtitle-font;
+
+        &:hover
+        {
+            color: $menu-text-strong;
+            background-color: #fff1;
+        }
+
+        &.active
+        {
+            color: $color-accent;
+            border-bottom-color: $color-accent;
+        }
+    }
+}
+
+.mp-content
+{
+    padding: 16px 20px;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mp-row
+{
+    flex-direction: row;
+    align-items: center;
+    padding: 8px 14px;
+    background-color: #0004;
+    border-radius: 6px;
+    gap: 12px;
+
+    .mp-label
+    {
+        font-size: 14px;
+        color: $menu-text;
+        flex-shrink: 0;
+    }
+
+    .mp-value
+    {
+        font-size: 15px;
+        font-weight: 700;
+        color: $color-text;
+        font-family: $title-font;
+        flex-grow: 1;
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        &.active
+        {
+            color: #4f4;
+        }
+
+        &.inactive
+        {
+            color: #f44;
+        }
+    }
+}
+
+.mp-actions
+{
+    padding-top: 8px;
+    justify-content: center;
+
+    .menu-action
+    {
+        width: 100%;
+    }
+}
+
+.mp-card
+{
+    padding: 14px 16px;
+    background-color: #0004;
+    border-radius: 8px;
+    border: 1px solid rgba( $color-accent, 0.1 );
+    flex-direction: column;
+    gap: 6px;
+
+    .mp-card-title
+    {
+        font-size: 15px;
+        font-weight: 700;
+        color: $color-text;
+        font-family: $title-font;
+    }
+
+    .mp-card-info
+    {
+        flex-direction: column;
+        gap: 3px;
+        font-size: 13px;
+        color: $menu-text;
+    }
+
+    .menu-action
+    {
+        width: 100%;
+        margin-top: 4px;
+    }
+
+    .mp-max
+    {
+        text-align: center;
+        font-size: 14px;
+        font-weight: 700;
+        color: #4f4;
+        padding: 6px;
+        letter-spacing: 2px;
+    }
+}

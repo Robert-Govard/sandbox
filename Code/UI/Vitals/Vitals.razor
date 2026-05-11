@@ -19,6 +19,10 @@
             <Image class="icon" Texture=@HealthIcon />
             <label class="value">@(DisplayHealth)</label>
         </div>
+        <div class="stat money hud-panel">
+            <label class="icon money-icon">$</label>
+            <label class="value">@(DisplayMoney)</label>
+        </div>
     </div>
 
     @if ( Weapon.IsValid() && Weapon.UsesAmmo )
@@ -45,6 +49,15 @@
 
     int DisplayHealth => (int)Player.Health;
     int DisplayArmour => (int)Player.Armour;
+    string DisplayMoney => FormatMoney( Player.PlayerData?.Money ?? 0 );
+
+    string FormatMoney( long amount )
+    {
+        if ( amount >= 1_000_000_000 ) return $"{amount / 1_000_000_000f:F1}B";
+        if ( amount >= 1_000_000 ) return $"{amount / 1_000_000f:F1}M";
+        if ( amount >= 10_000 ) return $"{amount / 1_000f:F1}K";
+        return amount.ToString();
+    }
 
     bool IsSpawnMenuOpen()
     {
@@ -61,6 +74,6 @@
     {
         if ( !Player.IsValid() || Player.WantsHideHud ) return 0;
 
-        return System.HashCode.Combine( Player.Health, Player.Armour, Weapon?.ClipContents, Weapon?.ReserveAmmo );
+        return System.HashCode.Combine( Player.Health, Player.Armour, Player.PlayerData?.Money, Weapon?.ClipContents, Weapon?.ReserveAmmo );
     }
 }
