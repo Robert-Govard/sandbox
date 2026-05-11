@@ -211,19 +211,19 @@ public static class MapProjectSaver
 			foreach ( var file in System.IO.Directory.GetFiles( mapsDir, "*.vpk", System.IO.SearchOption.TopDirectoryOnly ) )
 			{
 				var fileName = System.IO.Path.GetFileNameWithoutExtension( file ).ToLowerInvariant();
-				if ( !searchTokens.Any( t => fileName.Contains( t ) ) ) continue;
+				if ( !IsMapFileMatch( fileName, searchTokens ) ) continue;
 
 				var fullFileName = System.IO.Path.GetFileName( file );
 				if ( TryCopyFile( file, $"maps/{fullFileName}", targetRoot ) )
 					copiedCount++;
 			}
 
-			// Search subdirectories — match if dir name contains any token OR if any VPK inside matches
+			// Search subdirectories — match if dir name matches OR if any VPK inside matches
 			foreach ( var dir in System.IO.Directory.GetDirectories( mapsDir ) )
 			{
 				var dirName = System.IO.Path.GetFileName( dir );
 				var dirNameLower = dirName.ToLowerInvariant();
-				var dirMatches = searchTokens.Any( t => dirNameLower.Contains( t ) );
+				var dirMatches = IsMapFileMatch( dirNameLower, searchTokens );
 
 				// If directory name matches, copy ALL VPKs inside
 				if ( dirMatches )
@@ -252,7 +252,7 @@ public static class MapProjectSaver
 					foreach ( var file in System.IO.Directory.GetFiles( dir, "*.vpk", System.IO.SearchOption.AllDirectories ) )
 					{
 						var fileName = System.IO.Path.GetFileNameWithoutExtension( file ).ToLowerInvariant();
-						if ( !searchTokens.Any( t => fileName.Contains( t ) ) ) continue;
+						if ( !IsMapFileMatch( fileName, searchTokens ) ) continue;
 
 						// Found a matching VPK — copy the entire directory
 						foreach ( var allFile in System.IO.Directory.GetFiles( dir, "*", System.IO.SearchOption.AllDirectories ) )
@@ -358,7 +358,7 @@ public static class MapProjectSaver
 			foreach ( var file in System.IO.Directory.GetFiles( searchDir, "*.vpk", System.IO.SearchOption.TopDirectoryOnly ) )
 			{
 				var fileName = System.IO.Path.GetFileNameWithoutExtension( file ).ToLowerInvariant();
-				if ( !searchTokens.Any( t => fileName.Contains( t ) ) ) continue;
+				if ( !IsMapFileMatch( fileName, searchTokens ) ) continue;
 
 				var fullFileName = System.IO.Path.GetFileName( file );
 				if ( TryCopyFile( file, $"maps/{fullFileName}", targetRoot ) )
@@ -372,7 +372,7 @@ public static class MapProjectSaver
 				var dirNameLower = dirName.ToLowerInvariant();
 
 				// Check if directory name or any VPK inside matches
-				var dirMatches = searchTokens.Any( t => dirNameLower.Contains( t ) );
+				var dirMatches = IsMapFileMatch( dirNameLower, searchTokens );
 				if ( !dirMatches )
 				{
 					// Check VPKs inside
@@ -380,7 +380,7 @@ public static class MapProjectSaver
 					foreach ( var vpkFile in System.IO.Directory.GetFiles( dir, "*.vpk", System.IO.SearchOption.TopDirectoryOnly ) )
 					{
 						var vpkName = System.IO.Path.GetFileNameWithoutExtension( vpkFile ).ToLowerInvariant();
-						if ( searchTokens.Any( t => vpkName.Contains( t ) ) )
+						if ( IsMapFileMatch( vpkName, searchTokens ) )
 						{
 							hasMatch = true;
 							break;
@@ -430,9 +430,8 @@ public static class MapProjectSaver
 		{
 			var fileNameLower = file.ToLowerInvariant();
 
-			// Match if any search token is found in the filename
-			// e.g. "flatgrass" matches "flatgrass.vpk", "flatgrass_bakeresourcecache.vpk"
-			if ( !searchTokens.Any( t => fileNameLower.Contains( t ) ) ) continue;
+			// Match if any search token matches the filename (fuzzy)
+			if ( !IsMapFileMatch( fileNameLower, searchTokens ) ) continue;
 
 			var mountedPath = $"maps/{file}";
 			if ( !FileSystem.Mounted.FileExists( mountedPath ) ) continue;
@@ -517,6 +516,44 @@ public static class MapProjectSaver
 	}
 
 	/// <summary>
+	/// Check if a file/directory name matches any of the search tokens.
+	/// Uses fuzzy matching: a token matches if it's contained in the name,
+	/// OR if all underscore-separated segments of the name (ignoring version
+	/// suffixes like "_v1") are contained in the token.
+	/// e.g. token "downtown" matches "rp_downtown_3t_v1" (contains "downtown")
+	/// e.g. token "rp_downtown_3t" matches "rp_downtown_3t_v1" (all segments present)
+	/// </summary>
+	private static bool IsMapFileMatch( string nameLower, List<string> searchTokens )
+	{
+		foreach ( var token in searchTokens )
+		{
+			// Direct containment: token is a substring of the name
+			if ( nameLower.Contains( token ) )
+				return true;
+
+			// Reverse check: all segments of the name exist in the token
+			// This handles "rp_downtown_3t_v1" vs token "rpdowntown3t"
+			var nameSegments = nameLower.Split( '_', '.' );
+			var tokenNoUnderscore = token.Replace( "_", "" );
+
+			// Check if the name without underscores/version suffixes matches the token
+			var nameNoUnderscore = new System.Text.StringBuilder();
+			foreach ( var seg in nameSegments )
+			{
+				// Skip version suffixes like "v1", "v2"
+				if ( seg.Length <= 2 && seg.StartsWith( "v" ) && seg.Length > 1 && char.IsDigit( seg[1] ) )
+					continue;
+				nameNoUnderscore.Append( seg );
+			}
+
+			if ( nameNoUnderscore.ToString() == tokenNoUnderscore )
+				return true;
+		}
+
+		return false;
+	}
+
+	/// <summary>
 	/// Build a list of fuzzy search tokens from a package name.
 	/// Used by multiple approaches to find map files whose names
 	/// differ from the ident (e.g. "rpdowntown3t" vs "rp_downtown_3t_v1").
@@ -537,7 +574,116 @@ public static class MapProjectSaver
 				tokens.Add( segment.ToLowerInvariant() );
 		}
 
-		return tokens;
+		// Split at letter-digit boundaries (e.g. "rpdowntown3t" -> "rpdowntown", "3t")
+		// and digit-letter boundaries (e.g. "gm_flatgrass2b" -> "gm_flatgrass", "2b")
+		var boundarySegments = SplitAtAlphaNumericBoundaries( packageName );
+		foreach ( var seg in boundarySegments )
+		{
+			if ( seg.Length >= 3 )
+				tokens.Add( seg.ToLowerInvariant() );
+		}
+
+		// Strip common Source map prefixes to get the core name
+		// e.g. "rpdowntown" -> "downtown", "gmflatgrass" -> "flatgrass"
+		var commonPrefixes = new[] { "rp", "gm", "ttt", "ph", "de", "cs", "zm", "aw", "fy", "as", "es", "he", "ka", "xc", "sg", "jb" };
+		var lowerName = packageName.ToLowerInvariant().Replace( "_", "" );
+		foreach ( var prefix in commonPrefixes )
+		{
+			if ( lowerName.StartsWith( prefix ) && lowerName.Length > prefix.Length )
+			{
+				var stripped = lowerName[prefix.Length..];
+				if ( stripped.Length >= 3 )
+					tokens.Add( stripped );
+			}
+		}
+
+		// Add underscore-separated form: insert underscores at letter-digit boundaries
+		// e.g. "rpdowntown3t" -> "rpdowntown_3t" (helps match "rp_downtown_3t")
+		var underscored = InsertUnderscoresAtBoundaries( packageName );
+		if ( underscored != packageName.ToLowerInvariant() )
+			tokens.Add( underscored );
+
+		// Deduplicate
+		return tokens.Distinct().ToList();
+	}
+
+	/// <summary>
+	/// Split a string at boundaries where letters meet digits or vice versa.
+	/// e.g. "rpdowntown3t" -> ["rpdowntown", "3t"]
+	/// e.g. "gm_flatgrass2b" -> ["gm_flatgrass", "2b"]
+	/// </summary>
+	private static List<string> SplitAtAlphaNumericBoundaries( string input )
+	{
+		var segments = new List<string>();
+		var current = new System.Text.StringBuilder();
+
+		for ( var i = 0; i < input.Length; i++ )
+		{
+			if ( current.Length > 0 && i > 0 )
+			{
+				var prevIsDigit = char.IsDigit( input[i - 1] );
+				var curIsDigit = char.IsDigit( input[i] );
+
+				if ( prevIsDigit != curIsDigit )
+				{
+					if ( current.Length > 0 )
+						segments.Add( current.ToString() );
+					current.Clear();
+				}
+			}
+
+			current.Append( input[i] );
+		}
+
+		if ( current.Length > 0 )
+			segments.Add( current.ToString() );
+
+		return segments;
+	}
+
+	/// <summary>
+	/// Insert underscores at letter-digit and digit-letter boundaries.
+	/// e.g. "rpdowntown3t" -> "rpdowntown_3t"
+	/// Also insert underscores after common Source map prefixes.
+	/// e.g. "rpdowntown3t" -> "rp_downtown_3t"
+	/// </summary>
+	private static string InsertUnderscoresAtBoundaries( string input )
+	{
+		var result = new System.Text.StringBuilder();
+		var lower = input.ToLowerInvariant();
+
+		// First, insert underscore after common Source map prefixes
+		var commonPrefixes = new[] { "rp", "gm", "ttt", "ph", "de", "cs", "zm", "aw", "fy", "as", "es", "he", "ka", "xc", "sg", "jb" };
+		var prefixStripped = false;
+		foreach ( var prefix in commonPrefixes )
+		{
+			if ( lower.StartsWith( prefix ) && lower.Length > prefix.Length && char.IsLetter( lower[prefix.Length] ) )
+			{
+				result.Append( prefix );
+				result.Append( '_' );
+				for ( var i = prefix.Length; i < input.Length; i++ )
+				{
+					if ( i > prefix.Length && char.IsDigit( input[i] ) != char.IsDigit( input[i - 1] ) )
+						result.Append( '_' );
+					result.Append( input[i] );
+				}
+				prefixStripped = true;
+				break;
+			}
+		}
+
+		// No prefix match — just insert at alpha-numeric boundaries
+		if ( !prefixStripped )
+		{
+			for ( var i = 0; i < input.Length; i++ )
+			{
+				if ( i > 0 && char.IsDigit( input[i] ) != char.IsDigit( input[i - 1] ) )
+					result.Append( '_' );
+				result.Append( input[i] );
+			}
+		}
+
+		return result.ToString().ToLowerInvariant();
 	}
 
 	/// <summary>
