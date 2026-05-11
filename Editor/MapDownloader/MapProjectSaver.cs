@@ -233,36 +233,31 @@ public static class MapProjectSaver
 
 	/// <summary>
 	/// Direct lookup in FileSystem.Mounted for already-mounted maps.
-	/// After mounting, the map VPK is accessible as maps/{packagename}.vpk
-	/// and dependencies may be in maps/{packagename}/ subdirectory.
+	/// FindFile doesn't enumerate files inside mounted VPKs, so instead
+	/// we directly try to read known paths:
+	///   maps/{packagename}.vpk
+	///   maps/{packagename}_baked.vpk
+	///   maps/{packagename}_bakeresourcecache.vpk
+	///   maps/{packagename}/  (dependency directory)
 	/// </summary>
 	private static int CopyViaDirectLookup( string packageName, string targetRoot )
 	{
 		var copiedCount = 0;
-		var packageNameLower = packageName.ToLowerInvariant();
 
-		foreach ( var file in FileSystem.Mounted.FindFile( "maps/", "*.vpk", true ) )
+		// Known companion file suffixes that s&box generates for maps
+		var suffixes = new[] { "", "_baked", "_bakeresourcecache" };
+
+		foreach ( var suffix in suffixes )
 		{
-			var fileLower = file.ToLowerInvariant();
+			var vpkName = $"{packageName}{suffix}.vpk";
+			var mountedPath = $"maps/{vpkName}";
 
-			var baseName = fileLower;
-			if ( baseName.EndsWith( ".vpk" ) )
-				baseName = baseName[..^4];
-
-			if ( baseName != packageNameLower && !baseName.StartsWith( packageNameLower + "_" ) )
-				continue;
-
-			var mountedPath = $"maps/{file}";
 			if ( !FileSystem.Mounted.FileExists( mountedPath ) ) continue;
 
 			var data = FileSystem.Mounted.ReadAllBytes( mountedPath );
 			if ( data.Length == 0 ) continue;
 
-			var targetRelative = file;
-			if ( targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
-				targetRelative = targetRelative[5..];
-
-			var targetPath = System.IO.Path.Combine( targetRoot, targetRelative );
+			var targetPath = System.IO.Path.Combine( targetRoot, vpkName );
 			var targetDir = System.IO.Path.GetDirectoryName( targetPath );
 
 			if ( !string.IsNullOrEmpty( targetDir ) )
@@ -276,6 +271,7 @@ public static class MapProjectSaver
 			}
 		}
 
+		// Also check for dependency directory: maps/{packagename}/
 		var depDir = $"maps/{packageName}";
 		if ( FileSystem.Mounted.DirectoryExists( depDir ) )
 		{
