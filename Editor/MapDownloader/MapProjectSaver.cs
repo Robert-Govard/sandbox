@@ -5,14 +5,15 @@ namespace Editor;
 /// into the project's Assets/Maps directory so the map can be opened
 /// and edited in Hammer.
 ///
-/// Strategy: take a snapshot of all files visible in FileSystem.Mounted
-/// BEFORE mounting the package, then another snapshot AFTER mounting.
-/// The difference is exactly the files that belong to the newly mounted
-/// package — no guessing, no fuzzy name matching.
-///
-/// Fallback: if the snapshot approach finds nothing (e.g. the map was
-/// already mounted), we try the package-specific download cache directory
-/// on disk, then AssetSystem, then direct disk search by ident.
+/// Strategy:
+/// 1. Snapshot diff — take a snapshot of FileSystem.Mounted before and after
+///    mounting the package. The diff is exactly the new files. Works for
+///    newly downloaded maps.
+/// 2. Direct mounted FS lookup — for already-mounted maps (built-in or cached),
+///    look for maps/{packagename}.vpk and deps in maps/{packagename}/.
+///    The VPK filename in the virtual FS matches the package name part of the ident.
+/// 3. Package download cache dir on disk — {sbox_root}/download/assets/{ident_dir}/
+/// 4. AssetSystem.GetPackageFiles / FindByPath — for non-map asset packages
 /// </summary>
 public static class MapProjectSaver
 {
@@ -28,9 +29,12 @@ public static class MapProjectSaver
 		{
 			var targetRoot = GetMapsDirectory();
 
+			// Extract the package name part from the ident
+			// e.g. "facepunch.flatgrass" -> "flatgrass"
+			var packageName = GetPackageName( mapIdent );
+
 			// Step 1: Snapshot all files visible in the mounted filesystem BEFORE mounting
 			var beforeFiles = SnapshotMountedFiles();
-
 			Log.Info( $"MapProjectSaver: Snapshot before mount: {beforeFiles.Count} file(s)" );
 
 			// Step 2: Fetch and mount the package (downloads to cache if needed)
@@ -69,8 +73,17 @@ public static class MapProjectSaver
 				}
 			}
 
-			// Approach 2: Copy from the package-specific download cache directory on disk
-			// After MountAsync(), the package is downloaded to {sbox_root}/download/assets/{org}_{package}/
+			// Approach 2: Direct lookup in FileSystem.Mounted for already-mounted maps
+			// After mounting, the map VPK is accessible as maps/{packagename}.vpk
+			// and dependencies may be in maps/{packagename}/
+			copiedCount = CopyViaDirectLookup( packageName, targetRoot );
+			if ( copiedCount > 0 )
+			{
+				Log.Info( $"MapProjectSaver: Saved '{mapIdent}' via direct lookup ({copiedCount} file(s))" );
+				return copiedCount;
+			}
+
+			// Approach 3: Copy from the package-specific download cache directory on disk
 			copiedCount = CopyViaPackageDir( mapIdent, targetRoot );
 			if ( copiedCount > 0 )
 			{
@@ -78,7 +91,7 @@ public static class MapProjectSaver
 				return copiedCount;
 			}
 
-			// Approach 3: AssetSystem.GetPackageFiles (works for non-map asset packages)
+			// Approach 4: AssetSystem.GetPackageFiles (works for non-map asset packages)
 			copiedCount = CopyViaPackageFiles( package, targetRoot );
 			if ( copiedCount > 0 )
 			{
@@ -86,7 +99,7 @@ public static class MapProjectSaver
 				return copiedCount;
 			}
 
-			// Approach 4: AssetSystem.FindByPath + GetReferences
+			// Approach 5: AssetSystem.FindByPath + GetReferences
 			copiedCount = CopyViaAssetSystem( mapIdent, targetRoot );
 			if ( copiedCount > 0 )
 			{
@@ -113,6 +126,19 @@ public static class MapProjectSaver
 		var mapsDir = System.IO.Path.Combine( assetsPath, "Maps" );
 		System.IO.Directory.CreateDirectory( mapsDir );
 		return mapsDir;
+	}
+
+	/// <summary>
+	/// Extract the package name part from a map ident.
+	/// e.g. "facepunch.flatgrass" -> "flatgrass"
+	/// e.g. "softsplit.gm_bigcity" -> "gm_bigcity"
+	/// </summary>
+	private static string GetPackageName( string mapIdent )
+	{
+		var name = mapIdent;
+		if ( name.Contains( '.' ) )
+			name = name[( name.IndexOf( '.' ) + 1 )..];
+		return name;
 	}
 
 	/// <summary>
@@ -179,6 +205,110 @@ public static class MapProjectSaver
 				Log.Info( $"MapProjectSaver: Extracted '{mountedPath}' from mounted FS ({data.Length} bytes)" );
 			}
 		}
+
+		return copiedCount;
+	}
+
+	/// <summary>
+	/// Direct lookup in FileSystem.Mounted for already-mounted maps.
+	/// After mounting, the map VPK is accessible as maps/{packagename}.vpk
+	/// and dependencies may be in maps/{packagename}/ subdirectory.
+	///
+	/// We also scan for companion files like {packagename}_baked.vpk,
+	/// {packagename}_bakeresourcecache.vpk, etc.
+	/// </summary>
+	private static int CopyViaDirectLookup( string packageName, string targetRoot )
+	{
+		var copiedCount = 0;
+		var packageNameLower = packageName.ToLowerInvariant();
+
+		// Find VPK files in maps/ that match the package name
+		foreach ( var file in FileSystem.Mounted.FindFile( "maps/", "*.vpk", true ) )
+		{
+			var fileLower = file.ToLowerInvariant();
+
+			// Match: exact name or name starting with packagename_ (e.g. flatgrass_baked.vpk)
+			var baseName = fileLower;
+			if ( baseName.EndsWith( ".vpk" ) )
+				baseName = baseName[..^4];
+
+			// Check if this VPK belongs to our map
+			// e.g. packageName="flatgrass" matches "flatgrass.vpk", "flatgrass_baked.vpk"
+			// but NOT "other_flatgrass.vpk"
+			if ( baseName != packageNameLower && !baseName.StartsWith( packageNameLower + "_" ) )
+				continue;
+
+			var mountedPath = $"maps/{file}";
+			if ( !FileSystem.Mounted.FileExists( mountedPath ) ) continue;
+
+			var data = FileSystem.Mounted.ReadAllBytes( mountedPath );
+			if ( data.Length == 0 ) continue;
+
+			// Strip "maps/" prefix for target path
+			var targetRelative = file;
+			if ( targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
+				targetRelative = targetRelative[5..];
+
+			var targetPath = System.IO.Path.Combine( targetRoot, targetRelative );
+			var targetDir = System.IO.Path.GetDirectoryName( targetPath );
+
+			if ( !string.IsNullOrEmpty( targetDir ) )
+				System.IO.Directory.CreateDirectory( targetDir );
+
+			if ( !System.IO.File.Exists( targetPath ) )
+			{
+				System.IO.File.WriteAllBytes( targetPath, data.ToArray() );
+				copiedCount++;
+				Log.Info( $"MapProjectSaver: Extracted '{mountedPath}' via direct lookup ({data.Length} bytes)" );
+			}
+		}
+
+		// Also check for dependency directories: maps/{packagename}/
+		var depDir = $"maps/{packageName}";
+		if ( FileSystem.Mounted.DirectoryExists( depDir ) )
+		{
+			copiedCount += CopyMountedDirectoryRecursive( depDir, targetRoot );
+		}
+
+		return copiedCount;
+	}
+
+	/// <summary>
+	/// Recursively copy all files from a mounted filesystem directory to the target.
+	/// Strips the "maps/" prefix from the relative path since targetRoot is already Assets/Maps/.
+	/// </summary>
+	private static int CopyMountedDirectoryRecursive( string mountedDir, string targetRoot )
+	{
+		var copiedCount = 0;
+
+		foreach ( var file in FileSystem.Mounted.FindFile( mountedDir, "*", true ) )
+		{
+			var mountedPath = $"{mountedDir}/{file}";
+			if ( !FileSystem.Mounted.FileExists( mountedPath ) ) continue;
+
+			var data = FileSystem.Mounted.ReadAllBytes( mountedPath );
+			if ( data.Length == 0 ) continue;
+
+			// Build relative path: "maps/flatgrass/materials/foo.vmat" -> "flatgrass/materials/foo.vmat"
+			var targetRelative = mountedPath;
+			if ( targetRelative.StartsWith( "maps/", System.StringComparison.OrdinalIgnoreCase ) )
+				targetRelative = targetRelative[5..];
+
+			var targetPath = System.IO.Path.Combine( targetRoot, targetRelative );
+			var targetDir = System.IO.Path.GetDirectoryName( targetPath );
+
+			if ( !string.IsNullOrEmpty( targetDir ) )
+				System.IO.Directory.CreateDirectory( targetDir );
+
+			if ( !System.IO.File.Exists( targetPath ) )
+			{
+				System.IO.File.WriteAllBytes( targetPath, data.ToArray() );
+				copiedCount++;
+			}
+		}
+
+		if ( copiedCount > 0 )
+			Log.Info( $"MapProjectSaver: Extracted {copiedCount} dependency file(s) from '{mountedDir}/'" );
 
 		return copiedCount;
 	}
@@ -267,12 +397,9 @@ public static class MapProjectSaver
 	/// </summary>
 	private static int CopyViaAssetSystem( string mapIdent, string targetRoot )
 	{
-		var candidates = new List<string>();
+		var packageName = GetPackageName( mapIdent );
 
-		// Extract the package name part (after the dot)
-		var packageName = mapIdent;
-		if ( packageName.Contains( '.' ) )
-			packageName = packageName[( packageName.IndexOf( '.' ) + 1 )..];
+		var candidates = new List<string>();
 
 		if ( !packageName.StartsWith( "maps/" ) )
 			candidates.Add( $"maps/{packageName}.vpk" );
